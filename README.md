@@ -79,7 +79,7 @@ A second, H.264-specific contribution (correctness, not throughput): on RK3576 t
 VDPU383 needs a hardware **warmup sequence at runtime-resume** that the BSP performs
 and the mainline path missed; without it, H.264 produces an intermittent deblocking
 error. Replicating the warmup makes H.264 **64/64 bit-exact**, default-on. This was
-reported to the linux-media list (`66768711@symple.nz`). It ships in the full driver
+reported upstream to the linux-media list. It ships in the full driver
 in the sibling repos; it is noted here because it is the other mainline-H.264 fix
 from this effort. (The warmup is shared infrastructure — see the sibling drivers'
 `rkvdec-link.c` / the RK3576 init path.)
@@ -113,4 +113,3 @@ showed the cache config the mainline path was missing.
 - [`rkvdec-vdpu383-av1`](https://github.com/SympleNZ/rkvdec-vdpu383-av1) / [`rkvdec-vdpu383-vp9`](https://github.com/SympleNZ/rkvdec-vdpu383-vp9) — the mainline V4L2 AV1 / VP9 drivers (which ship these fixes in their full `src/`).
 - [`rkvdec-vdpu383-mpp-mainline`](https://github.com/SympleNZ/rkvdec-vdpu383-mpp-mainline) — the vendor MPP decoder on a mainline kernel (the same-silicon reference that exposed the cache gap).
 
-Simon Wright, Symple Solutions, Dunedin NZ.
