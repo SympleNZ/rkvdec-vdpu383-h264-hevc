@@ -1,0 +1,85 @@
+rkvdec-vdpu383: configure the VDPU383 read caches on the HEVC and H.264 paths
+
+The mainline rkvdec-vdpu383 HEVC and H.264 backends issue zero read-cache
+configuration. The VDPU383 has three reference read caches (CACHE0/1/2); the
+vendor MPP driver and the AV1/VP9 backends configure them per decode, but the
+HEVC/H.264 paths do not, so every reference/data read misses to DRAM and decode
+runs ~7x (HEVC) / ~2.4x (H.264) slower than the silicon is capable of.
+
+Map the dedicated read-cache MMIO window (DT reg-name "cache") and write the same
+config the AV1/VP9/MPP paths use, just before the decode kick. Gated by a
+hevc_cache module parameter (default on). Output is byte-identical with the cache
+off vs on (md5 18f9bbc46cf0528a both for HEVC) — pure throughput, no pixel change.
+
+Measured, 1080p pure-HW decode (RK3576, 7.0.1-edge-rockchip64):
+  HEVC : ~12 ms  -> 1.70 ms  (~7x, == vendor MPP)
+  H.264:  8.7 ms ->  3.6 ms  (~2.4x)
+
+NB: the offsets below are relative to the "cache" reg window. The RK3576 decoder
+node must expose that window (a distinct sub-region of the decoder MMIO); add the
+reg/reg-names entry if your DT lacks it.
+
+---
+
+--- a/drivers/.../rkvdec.c
++++ b/drivers/.../rkvdec.c
+@@ module parameters @@
++/*
++ * Configure the VDPU383 read caches on the mainline HEVC + H.264 paths (the
++ * AV1/VP9 backends and the vendor MPP driver already do this; the HEVC/H.264
++ * backends did not). Default on: a safe, large (~7x HEVC) throughput win with
++ * byte-identical output. Set 0 for A/B.
++ */
++int hevc_cache = 1;
++module_param(hevc_cache, int, 0644);
++MODULE_PARM_DESC(hevc_cache,
++	"Configure VDPU383 read caches on the HEVC + H.264 paths (1=on, default; 0=off for A/B)");
+
+@@ rkvdec_probe(), after the function/link reg windows are mapped @@
++	/*
++	 * Dedicated read-cache window (DT reg-name "cache"). Optional: if the DT
++	 * does not expose it, leave the caches unconfigured (old behaviour).
++	 */
++	rkvdec->cache = devm_platform_ioremap_resource_byname(pdev, "cache");
++	if (IS_ERR(rkvdec->cache))
++		rkvdec->cache = NULL;
+
+(and add `void __iomem *cache;` to struct rkvdec_dev.)
+
+--- a/drivers/.../rkvdec-vdpu383-hevc.c
++++ b/drivers/.../rkvdec-vdpu383-hevc.c
+@@ top of file @@
++extern int hevc_cache;	/* read-cache config (throughput); rkvdec.c */
+
+@@ in the HEVC decode-run, immediately before writing DEC_E (the kick) @@
++	/* Configure the VDPU383 read caches like AV1/VP9 and MPP do
++	 * (HEVC ran cache-OFF — the ~7x pure-HW-decode-time gap vs MPP). */
++	if (hevc_cache && rkvdec->cache) {
++		writel(0x1u | 0x2u | 0x10u, rkvdec->cache + 0x1c); /* CACHE0 cfg: CACHEABLE|READ_ALLOC|LINE_64 */
++		writel(0x1u | 0x2u | 0x10u, rkvdec->cache + 0x5c); /* CACHE1 cfg */
++		writel(0x1u | 0x2u | 0x10u, rkvdec->cache + 0x9c); /* CACHE2 cfg */
++		writel(0x1u, rkvdec->cache + 0x10);                /* CLR_CACHE0 */
++		writel(0x1u, rkvdec->cache + 0x50);                /* CLR_CACHE1 */
++		writel(0x1u, rkvdec->cache + 0x90);                /* CLR_CACHE2 */
++		writel(0x1cu, rkvdec->cache + 0x18);               /* MAX_READS */
++		wmb();
++	}
+ 	/* Start decoding! */
+ 	writel(..., rkvdec->link + VDPU383_LINK_DEC_ENABLE);
+
+--- a/drivers/.../rkvdec-vdpu383-h264.c
++++ b/drivers/.../rkvdec-vdpu383-h264.c
+@@ top of file @@
++extern int hevc_cache;	/* HEVC/H.264 read-cache config (throughput); rkvdec.c */
+
+@@ in the H.264 decode-run, immediately before writing DEC_E (the kick) @@
++	if (hevc_cache && rkvdec->cache) {
++		writel(0x1u | 0x2u | 0x10u, rkvdec->cache + 0x1c); /* CACHE0 cfg */
++		writel(0x1u | 0x2u | 0x10u, rkvdec->cache + 0x5c); /* CACHE1 cfg */
++		writel(0x1u | 0x2u | 0x10u, rkvdec->cache + 0x9c); /* CACHE2 cfg */
++		writel(0x1u, rkvdec->cache + 0x10);                /* CLR_CACHE0 */
++		writel(0x1u, rkvdec->cache + 0x50);                /* CLR_CACHE1 */
++		writel(0x1u, rkvdec->cache + 0x90);                /* CLR_CACHE2 */
++		writel(0x1cu, rkvdec->cache + 0x18);               /* MAX_READS */
++		wmb();
++	}
